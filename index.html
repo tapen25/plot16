@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Logger (ID ver)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+<style>
+  body { font-family: sans-serif; padding: 20px; text-align: center; background: #f0f0f0; transition: background 0.5s; }
+  
+  /* 入力欄のスタイル */
+  input[type="text"] { padding: 10px; font-size: 1.2em; width: 200px; text-align: center; border-radius: 5px; border: 1px solid #ccc; margin-bottom: 10px; }
+  
+  button { padding: 15px 30px; font-size: 1.2em; cursor: pointer; border: none; background: #333; color: white; border-radius: 8px; margin: 10px; }
+  
+  /* 送信ボタン：最初は非表示 */
+  button#send-btn { background: #4CAF50; display: none; } 
+  button:disabled { background: #999; cursor: not-allowed; }
+
+  #status, #debug, #counter-display { margin: 15px 0; font-size: 1.2em; }
+  #debug { color: #666; font-size: 0.9em; }
+  #counter-display { font-weight: bold; color: #d32f2f; }
+  .active { background: #e0f7fa; }
+</style>
+</head>
+<body>
+
+<div>
+  <input type="text" id="subject-id" placeholder="被験者ID">
+</div>
+
+<button id="start">Start</button>
+<button id="send-btn">送信</button>
+
+<div id="status">停止中</div>
+<div id="debug">Wait...</div>
+
+<script>
+const GAS_URL = "https://script.google.com/macros/s/AKfycbxGAOkqkvLAykyJbOldYCZ2qeAh-RpO5i9Mxd0qpktd6pP1246Zu7S4XwJit3KAUSU/exec";
+
+// ==========================================
+// 1. シンセ定義 (変更なし)
+// ==========================================
+const globalFilter = new Tone.Filter({
+  type: "lowpass",
+  frequency: 100, 
+  Q: 1 
+}).toDestination();
+
+const polySynth = new Tone.PolySynth(Tone.Synth, {
+  oscillator: { type: "sawtooth" },
+  envelope: { attack: 0.1, decay: 0.2, sustain: 0.5, release: 1 },
+  volume: -5
+}).connect(globalFilter);
+
+const kickSynth = new Tone.MonoSynth({
+  oscillator: { type: "sawtooth" }, 
+  envelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.2 }, 
+  volume: -100 
+}).connect(globalFilter);
+
+const bassSynth = new Tone.MonoSynth({
+  oscillator: { type: "triangle" }, 
+  envelope: { attack: 0.1, decay: 0.5, sustain: 0.8, release: 1 }, 
+  filterEnvelope: { attack: 0.1, baseFrequency: 200, octaves: 1, exponent: 2 },
+  volume: -100 
+}).toDestination();
+
+// ==========================================
+// 変数・設定
+// ==========================================
+let usePatternA = true;
+let isPlaying = false; 
+let currentNoteIndex = 0; 
+let currentBPM = 90; 
+let targetBPM = 90; 
+
+let motionHistory = [];
+const HISTORY_DURATION = 1500; 
+const RAMP_TIME = 3; 
+
+const patterns = {
+  A: ["C4","E4","G4","A4", "G4","F4", "E4"],
+  B: ["G4","E4","D4","C4", "D4","E4", "C4"]
+};
+const durations = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0];
+const kickIndices = [0, 2, 4, 8]; 
+const bassMap = { 0: "C3", 2: "E3", 4: "G3", 8: "C4" };
+
+let logData = [];           
+let startTime = 0;          
+let currentStd = 0;         
+
+let exploratoryActionCount = 0; 
+let isUserMoving = false;       
+const MOVE_THRESHOLD = 2.0;     
+
+function noteToFreq(note) {
+  const map = {
+    G3: -14, A3: -12, B3: -10,
+    C4: -9,  D4: -7,  E4: -5, F4: -4, G4: -2, A4: 0, B4: 2,
+    C5: 3
+  };
+  let semitone = map[note] || 0;
+  return 440 * Math.pow(2, semitone/12);
+}
+
+document.getElementById("start").onclick = async () => {
+  // ★追加: ID入力チェック
+  const subjectIdInput = document.getElementById("subject-id");
+  const subjectId = subjectIdInput.value.trim();
+  if (!subjectId) {
+    alert("被験者IDを入力してください！");
+    return;
+  }
+  // ★追加: 入力欄をロック（途中変更防止）
+  subjectIdInput.disabled = true;
+
+  if (typeof DeviceMotionEvent.requestPermission === 'function') {
+    try {
+      const permissionState = await DeviceMotionEvent.requestPermission();
+      if (permissionState !== 'granted') return alert("拒否されました");
+    } catch (e) { console.error(e); }
+  }
+  await Tone.start();
+  window.addEventListener("devicemotion", handleMotion);
+  
+  startTime = performance.now();
+  logData = []; 
+  exploratoryActionCount = 0;
+  
+  setInterval(updateLoop, 100); 
+
+  document.getElementById("status").innerText = "歩いてください (ID: " + subjectId + ")";
+  document.getElementById("start").style.display = "none";
+  document.getElementById("send-btn").style.display = "inline-block"; 
+  document.body.classList.add("active");
+};
+
+document.getElementById("send-btn").onclick = sendCSVToGmail;
+
+// ==========================================
+// 計算・制御 (変更なし)
+// ==========================================
+
+function computeMeanStd(arr) {
+  const n = arr.length;
+  if (n === 0) return { mean: 0, std: 0 };
+  const mean = arr.reduce((s, v) => s + v, 0) / n;
+  const varSum = arr.reduce((s, v) => s + (v - mean) * (v - mean), 0) / n;
+  const std = Math.sqrt(varSum);
+  return { mean, std };
+}
+
+function handleMotion(e) {
+  const acc = e.accelerationIncludingGravity;
+  if (!acc) return;
+
+  const mag = Math.sqrt(acc.x**2 + acc.y**2 + acc.z**2);
+  const now = performance.now();
+
+  motionHistory.push({ time: now, val: mag });
+  motionHistory = motionHistory.filter(item => now - item.time < HISTORY_DURATION);
+
+  const stats = computeMeanStd(motionHistory.map(item => item.val));
+  currentStd = stats.std; 
+  
+  const cleanIntensity = currentStd < 0.8 ? 0 : currentStd;
+
+  targetBPM = mapStdToBPM(cleanIntensity);
+  updateFilterAndVol(cleanIntensity);
+
+  if (!isPlaying && mag > 13.0) {
+    startSequence();
+  }
+}
+
+function updateLoop() {
+  if (!isPlaying) return;
+
+  const diff = targetBPM - currentBPM;
+  const step = diff * 0.02; 
+  currentBPM += step;
+
+  const nowMoving = currentStd > MOVE_THRESHOLD;
+
+  if (nowMoving !== isUserMoving) {
+    exploratoryActionCount++;
+    isUserMoving = nowMoving;
+    document.getElementById("counter-display").innerText = 
+      `探索行動回数: ${exploratoryActionCount}`;
+  }
+
+  document.getElementById("debug").innerText =
+    `Target: ${Math.floor(targetBPM)} / Cur: ${Math.floor(currentBPM)} / Std: ${currentStd.toFixed(2)}`;
+
+  const timeSec = ((performance.now() - startTime) / 1000).toFixed(3);
+  logData.push({
+    time: timeSec,
+    std: currentStd.toFixed(4),
+    bpm: currentBPM.toFixed(2),
+    isMoving: isUserMoving ? 1 : 0,
+    switchCount: exploratoryActionCount
+  });
+}
+
+// 【設定】
+const BASE_BPM = 108;      // 文献に基づく基準BPM
+const BASE_STD = 2.5;      // 標準的な歩行時の揺れ（※仮定値。実際に歩いて調整が必要）
+const VARIATION_RANGE = 0.10; // 変動幅（±10% = 97.2 ~ 118.8 BPM）DJ的な微細な変化
+
+function mapStdToBPM(std) {
+  // 1. ノイズカット（静止時は変化させない、または基準に戻す）
+  if (std < 0.5) return currentBPM; 
+
+  // 2. 「基準との差（相対値）」を計算
+  // std が BASE_STD より大きければプラス、小さければマイナスになる
+  const diff = std - BASE_STD;
+
+  // 3. 変化係数を適用（感度調整）
+  // 揺れが 1 増えるごとに、BPMをどれくらい変えるか
+  const sensitivity = 4; 
+  let targetChange = diff * sensitivity;
+
+  // 4. ベースに加算
+  let bpm = BASE_BPM + targetChange;
+
+  // 5. 変動幅を制限（DJ的アプローチ：極端に速く/遅くしない）
+  const minBPM = BASE_BPM * (1 - VARIATION_RANGE); // 約 97
+  const maxBPM = BASE_BPM * (1 + VARIATION_RANGE); // 約 119
+
+  if (bpm < minBPM) bpm = minBPM;
+  if (bpm > maxBPM) bpm = maxBPM;
+
+  return bpm;
+}
+
+function updateFilterAndVol(std) {
+  const minFreq = 100;   
+  const maxFreq = 2000;   
+  const sensitivity = 15.0; 
+
+  let ratio = std / sensitivity;
+  if (ratio > 1.0) ratio = 1.0;
+
+  let targetFreq = minFreq * Math.pow(maxFreq / minFreq, ratio);
+  globalFilter.frequency.rampTo(targetFreq, RAMP_TIME);
+
+  let kickVol = -90; 
+  if (std > 2.0) {
+    kickVol = -20 + (std - 2) * 4; 
+    if (kickVol > -5) kickVol = -5; 
+  }
+  kickSynth.volume.rampTo(kickVol, RAMP_TIME);
+
+  let bassVol = -100;
+  if (std > 1.5) { 
+    bassVol = -30 + (std - 1.5) * 4; 
+    if (bassVol > -15) bassVol = -15; 
+  }
+  bassSynth.volume.rampTo(bassVol, RAMP_TIME);
+}
+
+// ==========================================
+// Gmail送信機能 (GAS連携) ★修正あり
+// ==========================================
+function sendCSVToGmail() {
+  if (logData.length === 0) {
+    alert("データがありません。");
+    return;
+  }
+  // ★追加: IDの取得
+  const subjectId = document.getElementById("subject-id").value.trim() || "NoID";
+
+  if (GAS_URL.includes("xxxxxxxxxxxxxxxxx")) {
+    alert("GAS_URLを設定してください");
+    return;
+  }
+  
+  const btn = document.getElementById("send-btn");
+  btn.disabled = true;
+  btn.innerText = "送信中...";
+
+  let csvContent = "Time(sec),STD(Intensity),BPM,IsMoving(0/1),ExploratoryCount_Cumulative\n";
+  logData.forEach(row => {
+    csvContent += `${row.time},${row.std},${row.bpm},${row.isMoving},${row.switchCount}\n`;
+  });
+
+  // ★変更: ファイル名を動的に生成して送信パラメータに追加
+  const dynamicFileName = `Data_${subjectId}_${new Date().toISOString().slice(0,10)}.csv`;
+
+  fetch(GAS_URL, {
+    method: 'POST',
+    body: JSON.stringify({ 
+      csvData: csvContent,
+      fileName: dynamicFileName, // GAS側でこれを受け取る必要があります
+      subjectId: subjectId       // (オプション) 件名用などに送る
+    })
+  })
+  .then(response => {
+    alert(`送信完了！\nID: ${subjectId}\nファイル名: ${dynamicFileName}`);
+    btn.innerText = "送信完了";
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.innerText = "Gmailに送信";
+    }, 3000);
+  })
+  .catch(error => {
+    console.error('Error:', error);
+    alert("送信失敗");
+    btn.disabled = false;
+    btn.innerText = "Gmailに送信";
+  });
+}
+
+// ==========================================
+// シーケンス制御 (変更なし)
+// ==========================================
+function startSequence() {
+  isPlaying = true;
+  currentNoteIndex = 0;
+  playNextNote(); 
+}
+
+function playNextNote() {
+  const currentPattern = usePatternA ? patterns.A : patterns.B;
+  
+  if (currentNoteIndex >= currentPattern.length) {
+    finishSequence();
+    return;
+  }
+
+  const noteName = currentPattern[currentNoteIndex];
+  const durationVal = durations[currentNoteIndex];
+  const beatDuration = 60 / currentBPM; 
+  const noteTimeLen = beatDuration * durationVal;
+  
+  const freq = noteToFreq(noteName);
+  polySynth.triggerAttackRelease(freq, noteTimeLen);
+
+  if (kickIndices.includes(currentNoteIndex)) {
+    kickSynth.triggerAttackRelease("C2", "8n");
+  }
+  if (bassMap[currentNoteIndex]) {
+    bassSynth.triggerAttackRelease(bassMap[currentNoteIndex], "2n");
+  }
+
+  document.getElementById("status").innerText = 
+    `再生中: ${usePatternA?"A":"B"} (${currentNoteIndex+1}/${currentPattern.length})`;
+
+  setTimeout(() => {
+    currentNoteIndex++;
+    playNextNote(); 
+  }, noteTimeLen * 1000); 
+}
+
+function finishSequence() {
+  isPlaying = false;
+  usePatternA = !usePatternA; 
+  document.getElementById("status").innerText = "待機中...";
+  globalFilter.frequency.rampTo(100, 5);
+  kickSynth.volume.rampTo(-100, 5);
+  bassSynth.volume.rampTo(-100, 5);
+  targetBPM = 90;
+}
+</script>
+
+</body>
+</html>
+
