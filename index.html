@@ -88,6 +88,32 @@ const patterns = {
 const durations = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0];
 const kickIndices = [0, 2, 4, 8]; 
 const bassMap = { 0: "C3", 2: "E3", 4: "G3", 8: "C4" };
+// ==========================================
+// ★追加: Wake Lock (スリープ防止) 制御
+// ==========================================
+let wakeLock = null;
+
+async function requestWakeLock() {
+  if ('wakeLock' in navigator) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      console.log('Wake Lock is active');
+      
+      // 画面の表示状態が変わった時（タブ切り替えなど）に再取得を試みる
+      document.addEventListener('visibilitychange', async () => {
+        if (wakeLock !== null && document.visibilityState === 'visible') {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      });
+      
+    } catch (err) {
+      console.error(`${err.name}, ${err.message}`);
+      alert("スリープ防止機能の起動に失敗しました: " + err.message);
+    }
+  } else {
+    alert("このブラウザはスリープ防止機能(Wake Lock)に対応していません。\n設定で自動ロックを「なし」にしてください。");
+  }
+}
 
 let logData = [];           
 let startTime = 0;          
@@ -125,6 +151,7 @@ document.getElementById("start").onclick = async () => {
     } catch (e) { console.error(e); }
   }
   await Tone.start();
+  await requestWakeLock();
   window.addEventListener("devicemotion", handleMotion);
   
   startTime = performance.now();
@@ -241,7 +268,7 @@ function updateFilterAndVol(std) {
   // ==========================================
   // 設定：相対値変化パラメーター
   // ==========================================
-  const BASE_STD = 2.5;       // 基準となる揺れの大きさ
+  const BASE_STD = 4;       // 基準となる揺れの大きさ
   const CENTER_FREQ = 1000;   // 基準(2.5)の時の周波数 (Hz)
   const SENSITIVITY = 1.0;    // 感度: STDが1ズレるごとに1オクターブ変化
   
