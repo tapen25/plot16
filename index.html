@@ -86,8 +86,8 @@ const patterns = {
   B: ["D3", "A3", "F4", "D5", "A4", "F4", "D4"]
 };
 const durations = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0];
-const kickIndices = [0, 2, 4, 8]; 
-const bassMap = { 0: "C3", 2: "E3", 4: "G3", 8: "C4" };
+//const kickIndices = [0, 2, 4, 8]; 
+//const bassMap = { 0: "C3", 2: "E3", 4: "G3", 8: "C4" };
 
 let logData = [];           
 let startTime = 0;          
@@ -238,22 +238,32 @@ function mapStdToBPM(std) {
 }
 
 function updateFilterAndVol(std) {
-  // ★変更: 文献に基づき範囲を 500Hz - 3000Hz に設定
-  const minFreq = 500;   
-  const maxFreq = 3000;   
+  // ==========================================
+  // 設定：相対値変化パラメーター
+  // ==========================================
+  const BASE_STD = 2.5;       // 基準となる揺れの大きさ
+  const CENTER_FREQ = 1000;   // 基準(2.5)の時の周波数 (Hz)
+  const SENSITIVITY = 1.0;    // 感度: STDが1ズレるごとに1オクターブ変化
   
-  // 感度設定 (stdの最大想定値。必要に応じて調整してください)
-  const sensitivity = 15.0; 
+  const MIN_LIMIT = 200;      // 周波数の下限 (Hz)
+  const MAX_LIMIT = 3000;     // ★周波数の上限 (Hz) - 3000でカット
+  // ==========================================
 
-  let ratio = std / sensitivity;
-  if (ratio > 1.0) ratio = 1.0;
+  // 1. 基準値との差分（相対値）を計算
+  const diff = std - BASE_STD;
 
-  // 指数関数的なマッピング（聴覚上の変化を自然にするため）
-  // 説明文にある「次式」が線形か指数か不明ですが、音響フィルタは通常指数が推奨されます
-  let targetFreq = minFreq * Math.pow(maxFreq / minFreq, ratio);
-  
+  // 2. 指数関数的な変化（相対変化）を適用
+  //    基準(1000Hz)に対し、差分に応じてオクターブ単位で変化
+  let targetFreq = CENTER_FREQ * Math.pow(2, diff * SENSITIVITY);
+
+  // 3. 上限・下限のガード処理
+  if (targetFreq < MIN_LIMIT) targetFreq = MIN_LIMIT;
+  if (targetFreq > MAX_LIMIT) targetFreq = MAX_LIMIT; // 3000Hzを超えないように制限
+
+  // 4. フィルターに適用
   globalFilter.frequency.rampTo(targetFreq, RAMP_TIME);
 
+  
   let kickVol = -90; 
   if (std > 2.0) {
     kickVol = -20 + (std - 2) * 4; 
