@@ -43,7 +43,7 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbxGAOkqkvLAykyJbOldYCZ2
 // ==========================================
 const globalFilter = new Tone.Filter({
   type: "lowpass",
-  frequency: 100, 
+  frequency: 500, 
   Q: 1 
 }).toDestination();
 
@@ -80,8 +80,10 @@ const HISTORY_DURATION = 1500;
 const RAMP_TIME = 3; 
 
 const patterns = {
-  A: ["C4","E4","G4","A4", "G4","F4", "E4"],
-  B: ["G4","E4","D4","C4", "D4","E4", "C4"]
+  
+  A: ["C3", "G3", "E4", "C5", "G4", "E4", "C4"],
+  
+  B: ["D3", "A3", "F4", "D5", "A4", "F4", "D4"]
 };
 const durations = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0];
 const kickIndices = [0, 2, 4, 8]; 
@@ -236,14 +238,20 @@ function mapStdToBPM(std) {
 }
 
 function updateFilterAndVol(std) {
-  const minFreq = 100;   
-  const maxFreq = 2000;   
+  // ★変更: 文献に基づき範囲を 500Hz - 3000Hz に設定
+  const minFreq = 500;   
+  const maxFreq = 3000;   
+  
+  // 感度設定 (stdの最大想定値。必要に応じて調整してください)
   const sensitivity = 15.0; 
 
   let ratio = std / sensitivity;
   if (ratio > 1.0) ratio = 1.0;
 
+  // 指数関数的なマッピング（聴覚上の変化を自然にするため）
+  // 説明文にある「次式」が線形か指数か不明ですが、音響フィルタは通常指数が推奨されます
   let targetFreq = minFreq * Math.pow(maxFreq / minFreq, ratio);
+  
   globalFilter.frequency.rampTo(targetFreq, RAMP_TIME);
 
   let kickVol = -90; 
@@ -358,7 +366,9 @@ function finishSequence() {
   isPlaying = false;
   usePatternA = !usePatternA; 
   document.getElementById("status").innerText = "待機中...";
-  globalFilter.frequency.rampTo(100, 5);
+  
+  globalFilter.frequency.rampTo(500, 5); 
+  
   kickSynth.volume.rampTo(-100, 5);
   bassSynth.volume.rampTo(-100, 5);
   targetBPM = 90;
