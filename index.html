@@ -356,12 +356,12 @@ function playNextNote() {
   const freq = noteToFreq(noteName);
   polySynth.triggerAttackRelease(freq, noteTimeLen);
 
-  if (kickIndices.includes(currentNoteIndex)) {
+  /*if (kickIndices.includes(currentNoteIndex)) {
     kickSynth.triggerAttackRelease("C2", "8n");
   }
   if (bassMap[currentNoteIndex]) {
     bassSynth.triggerAttackRelease(bassMap[currentNoteIndex], "2n");
-  }
+  }*/
 
   document.getElementById("status").innerText = 
     `再生中: ${usePatternA?"A":"B"} (${currentNoteIndex+1}/${currentPattern.length})`;
