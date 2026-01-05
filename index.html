@@ -41,26 +41,18 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbxGAOkqkvLAykyJbOldYCZ2
 // ==========================================
 // 1. シンセ定義 (変更なし)
 // ==========================================
-// ==========================================
-// 1. シンセ定義 (倍音・フィルター強化版)
-// ==========================================
 const globalFilter = new Tone.Filter({
   type: "lowpass",
   frequency: 500, 
-  Q: 5  // ★変更: 1 -> 5 (レゾナンスを上げると、フィルターの動きが強調され"クセ"が出ます)
+  Q: 1 
 }).toDestination();
 
 const polySynth = new Tone.PolySynth(Tone.Synth, {
-  oscillator: { 
-    type: "fatsawtooth", // ★変更: 通常のsawtoothより倍音が豊かで太い音
-    count: 3, 
-    spread: 20 
-  },
+  oscillator: { type: "sawtooth" },
   envelope: { attack: 0.1, decay: 0.2, sustain: 0.5, release: 1 },
-  volume: -8 // fatsawtoothは音が大きいので少し下げる
+  volume: -5
 }).connect(globalFilter);
 
-// キックとベースは変更なしでもOKですが、バランスを見て調整
 const kickSynth = new Tone.MonoSynth({
   oscillator: { type: "sawtooth" }, 
   envelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.2 }, 
@@ -68,9 +60,9 @@ const kickSynth = new Tone.MonoSynth({
 }).connect(globalFilter);
 
 const bassSynth = new Tone.MonoSynth({
-  oscillator: { type: "square" }, // ★変更: ベースも倍音が多い矩形波に変更して存在感を出す
+  oscillator: { type: "triangle" }, 
   envelope: { attack: 0.1, decay: 0.5, sustain: 0.8, release: 1 }, 
-  filterEnvelope: { attack: 0.1, baseFrequency: 200, octaves: 2, exponent: 2 },
+  filterEnvelope: { attack: 0.1, baseFrequency: 200, octaves: 1, exponent: 2 },
   volume: -100 
 }).toDestination();
 
